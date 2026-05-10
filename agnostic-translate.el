@@ -405,7 +405,7 @@ Expects lines like \"[Language]: translation text\"."
                      agnostic-translate--history)))
            (setq header-line-format
                  (propertize
-                  " Translate  RET copy | C-c C-k close | n new | h history"
+                  " Translate  w copy | C-c C-k close | n new | h history"
                   'face 'agnostic-translate-header-face)))
           ('signal
            (setq header-line-format
@@ -458,7 +458,7 @@ Text to translate:
 
 (defvar agnostic-translate-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET")     #'agnostic-translate-copy)
+    (define-key map (kbd "w")       #'agnostic-translate-copy)
     (define-key map (kbd "C-c C-c") #'agnostic-translate-send)
     (define-key map (kbd "C-c C-k") #'agnostic-translate-close)
     (define-key map (kbd "q")       #'agnostic-translate-close)
@@ -483,16 +483,28 @@ Text to translate:
 ;;; Commands
 
 (defun agnostic-translate-copy ()
-  "Copy the translation result to the kill ring."
+  "Copy a translation to the kill ring.
+With multiple language variants in the result, prompt via
+`completing-read' for which one to copy."
   (interactive)
-  (if (and (markerp agnostic-translate--result-start)
-           (> (point-max) agnostic-translate--result-start))
-      (let ((text (string-trim
-                   (buffer-substring-no-properties
-                    agnostic-translate--result-start (point-max)))))
-        (kill-new text)
-        (message "Copied: %s" (truncate-string-to-width text 60 nil nil "...")))
-    (user-error "No translation result yet")))
+  (unless (and (markerp agnostic-translate--result-start)
+               (> (point-max) agnostic-translate--result-start))
+    (user-error "No translation result yet"))
+  (let* ((raw (string-trim
+               (buffer-substring-no-properties
+                agnostic-translate--result-start (point-max))))
+         (results (agnostic-translate--parse-results raw))
+         (text (cond
+                ((null results) raw)
+                ((= 1 (length results)) (cdar results))
+                (t (cdr (assoc (completing-read "Copy translation: "
+                                                (mapcar #'car results)
+                                                nil t)
+                               results))))))
+    (when (and text (not (string-empty-p text)))
+      (kill-new text)
+      (message "Copied: %s"
+               (truncate-string-to-width text 60 nil nil "...")))))
 
 (defun agnostic-translate-close ()
   "Cancel any running process and close the popup."

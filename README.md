@@ -50,7 +50,7 @@ Clone the repo and add it to your `load-path`:
 
 | Key       | Action                          |
 |-----------|---------------------------------|
-| `RET`     | Copy translation to kill ring   |
+| `w`       | Copy translation (prompts if multiple) |
 | `n`       | Start a new translation         |
 | `h`       | Show history                    |
 | `q`       | Close the popup                 |
