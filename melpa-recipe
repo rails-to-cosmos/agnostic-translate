@@ -1,0 +1,5 @@
+;; Submission recipe for melpa/melpa.
+;; Copy this into melpa/melpa/recipes/agnostic-translate in a PR (file name: just "agnostic-translate").
+(agnostic-translate :fetcher github
+                    :repo "rails-to-cosmos/agnostic-translate"
+                    :files (:defaults))

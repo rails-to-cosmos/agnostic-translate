@@ -1,0 +1,46 @@
+name: test
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs_version: ['28.1', '29.4', 'snapshot']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Install package-lint
+        run: |
+          emacs --batch \
+            --eval "(require 'package)" \
+            --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
+            --eval "(package-initialize)" \
+            --eval "(package-refresh-contents)" \
+            --eval "(package-install 'package-lint)"
+
+      - name: Lint
+        run: |
+          emacs --batch \
+            --eval "(require 'package)" \
+            --eval "(package-initialize)" \
+            -l package-lint \
+            -f package-lint-batch-and-exit \
+            agnostic-translate.el
+
+      - name: Byte-compile (warnings as errors)
+        run: |
+          emacs --batch \
+            --eval "(setq byte-compile-error-on-warn t)" \
+            -L . \
+            -f batch-byte-compile agnostic-translate.el
