@@ -78,10 +78,24 @@ Initialized from system locale and keyboard layouts."
   :type '(repeat string)
   :group 'agnostic-translate)
 
+(defconst agnostic-translate-model-choices
+  '("claude-opus-4-7"
+    "claude-opus-4-6"
+    "claude-sonnet-4-6"
+    "claude-haiku-4-5")
+  "Claude models offered by `agnostic-translate-menu' under the `-m' switch.
+The CLI accepts these full names as well as aliases like \"opus\",
+\"sonnet\", \"haiku\".  Edit this list to add new models as they ship.")
+
 (defcustom agnostic-translate-model nil
   "Model passed to claude as `--model'.
-Nil means use claude's default."
-  :type '(choice (const :tag "Default" nil)
+Nil means use claude's default (whatever its config picks).  A string
+is passed through verbatim — full names like \"claude-opus-4-7\" or
+aliases like \"opus\" both work.
+
+Normally toggled per-invocation via the `-m' switch in
+`agnostic-translate-menu' rather than set directly."
+  :type '(choice (const :tag "Default (claude picks)" nil)
                  (string :tag "Model name"))
   :group 'agnostic-translate)
 
@@ -320,7 +334,9 @@ Each entry is a plist (:source :results :time).
          (no-osc (replace-regexp-in-string "\e\\][^\a]*\\(?:\a\\|\e\\\\\\)" "" no-cr))
          (no-csi (replace-regexp-in-string "\e\\[[?<>=]*[0-9;]*[a-zA-Z]" "" no-osc))
          (no-esc (replace-regexp-in-string "\e" "" no-csi))
-         (result (ansi-color-apply no-esc)))
+         (no-num-lines (replace-regexp-in-string
+                        "^[ \t]*[0-9]+[ \t]*\\(?:\n\\|\\'\\)" "" no-esc))
+         (result (ansi-color-apply no-num-lines)))
     (if (string-match-p "\\`[0-9[:space:]]*\\'" result) "" result)))
 
 (defun agnostic-translate--filter (proc chunk)
@@ -357,7 +373,8 @@ Expects lines like \"[Language]: translation text\"."
                     results))
             (setq current-lang (match-string 1 line))
             (setq current-lines (list (match-string 2 line))))
-        (when current-lang
+        (when (and current-lang
+                   (not (string-match-p "\\`[ \t]*[0-9]+[ \t]*\\'" line)))
           (push line current-lines))))
     (when current-lang
       (push (cons current-lang
@@ -612,13 +629,46 @@ in `agnostic-translate-languages'."
   "Return `agnostic-translate-all-languages'."
   agnostic-translate-all-languages)
 
+(defun agnostic-translate--model-choices ()
+  "Return `agnostic-translate-model-choices' (transient `:choices' wants a fn)."
+  agnostic-translate-model-choices)
+
+(defun agnostic-translate--menu-model ()
+  "Return the menu's `-m' value as a model string, or nil if not set."
+  (cl-some (lambda (a)
+             (and (stringp a)
+                  (string-prefix-p "--model=" a)
+                  (substring a (length "--model="))))
+           (transient-args 'agnostic-translate-menu)))
+
+;;;###autoload
+(defun agnostic-translate-set-default-model (model)
+  "Set MODEL as the default for translation runs and persist it.
+Empty input clears the default (claude will pick).  The value is saved
+via `customize-save-variable', so it survives Emacs restarts.
+
+Per-invocation overrides via the menu's `-m' switch are unaffected."
+  (interactive
+   (list (completing-read
+          (format "Default model (current: %s, empty = claude picks): "
+                  (or agnostic-translate-model "none"))
+          agnostic-translate-model-choices nil nil nil nil
+          agnostic-translate-model)))
+  (let ((value (if (string-empty-p (or model "")) nil model)))
+    (customize-save-variable 'agnostic-translate-model value)
+    (message "Default model %s"
+             (if value (format "set to %s (saved)" value)
+               "cleared (claude picks)"))))
+
 ;;;###autoload (autoload 'agnostic-translate-menu "agnostic-translate" nil t)
 
 (transient-define-suffix agnostic-translate--menu-translate ()
-  "Translate region or prompt for text."
+  "Translate region or prompt for text; honors the menu's `-m' switch."
   :description "Translate"
   (interactive)
-  (call-interactively #'agnostic-translate))
+  (let ((agnostic-translate-model
+         (or (agnostic-translate--menu-model) agnostic-translate-model)))
+    (call-interactively #'agnostic-translate)))
 
 (transient-define-suffix agnostic-translate--menu-add-lang ()
   "Add a language to the active list."
@@ -660,13 +710,18 @@ in `agnostic-translate-languages'."
 
 (transient-define-prefix agnostic-translate-menu ()
   "Translation commands."
+  ["Options"
+   ("-m" "Model" "--model="
+    :choices agnostic-translate--model-choices)]
   [["Translate"
     ("t" agnostic-translate--menu-translate)
     ("h" "History" agnostic-translate-show-history)]
    ["Languages"
     ("i" agnostic-translate--menu-show-langs)
     ("a" agnostic-translate--menu-add-lang)
-    ("r" agnostic-translate--menu-remove-lang)]])
+    ("r" agnostic-translate--menu-remove-lang)]
+   ["Model"
+    ("M" "Set default model" agnostic-translate-set-default-model)]])
 
 (provide 'agnostic-translate)
 
