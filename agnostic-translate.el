@@ -14,9 +14,9 @@
 ;; every other language in a configurable list (seeded from system locale
 ;; and keyboard layouts).
 ;;
-;; Results appear in an animated child-frame popup with easy copy-paste
-;; and a persistent history.  Language list is managed via a transient
-;; menu and survives restarts through `customize'.
+;; Results appear in a reusable buffer with easy copy-paste and a
+;; persistent history.  Language list is managed via a transient menu
+;; and survives restarts through `customize'.
 ;;
 ;; Requires `claude' CLI (https://docs.anthropic.com/en/docs/claude-cli)
 ;; on PATH.
@@ -27,8 +27,6 @@
 (require 'subr-x)
 (require 'transient)
 (require 'ansi-color)
-
-(declare-function face-remap-remove-relative "face-remap")
 
 ;;; Customization
 
@@ -105,35 +103,7 @@ Normally toggled per-invocation via the `-m' switch in
     "Dutch" "Polish" "Turkish" "Ukrainian" "Czech" "Swedish")
   "All languages offered when adding to the active list.")
 
-(defcustom agnostic-translate-frame-size '(80 . 20)
-  "Target (COLS . ROWS) for the translation popup."
-  :type '(cons integer integer)
-  :group 'agnostic-translate)
-
-(defcustom agnostic-translate-bubble-steps 8
-  "Number of animation frames for the popup grow effect."
-  :type 'integer
-  :group 'agnostic-translate)
-
-(defcustom agnostic-translate-bubble-interval 0.018
-  "Seconds between animation steps."
-  :type 'number
-  :group 'agnostic-translate)
-
 ;;; Faces
-
-(defface agnostic-translate-frame-face
-  '((((background dark))
-     :background "#2a2a3a" :foreground "#e6e6ee")
-    (t :background "#fff8e6" :foreground "#1a1a1a"))
-  "Default text and background for the translation popup."
-  :group 'agnostic-translate)
-
-(defface agnostic-translate-frame-border-face
-  '((((background dark)) :background "#9ece6a")
-    (t :background "#40a02b"))
-  "Border color for the translation popup."
-  :group 'agnostic-translate)
 
 (defface agnostic-translate-header-face
   '((t :inherit header-line :slant italic))
@@ -162,35 +132,12 @@ Normally toggled per-invocation via the `-m' switch in
   "Face for language labels."
   :group 'agnostic-translate)
 
-;;; Frame parameters
-
-(defvar agnostic-translate-frame-parameters
-  '((minibuffer . nil)
-    (undecorated . t)
-    (internal-border-width . 2)
-    (child-frame-border-width . 1)
-    (left-fringe . 8) (right-fringe . 8)
-    (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil)
-    (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0)
-    (no-accept-focus . nil)
-    (unsplittable . t)
-    (no-other-frame . t)
-    (cursor-type . box)
-    (visibility . nil))
-  "Frame parameters for the translation popup child frame.")
-
 ;;; State
-
-(defvar agnostic-translate--frame nil
-  "Currently visible translation child frame, or nil.")
 
 (defvar agnostic-translate--history nil
   "List of past translations, newest first.
 Each entry is a plist (:source :results :time).
 :results is an alist ((LANG . TEXT) ...).")
-
-(defvar-local agnostic-translate--face-cookie nil
-  "Cookie from `face-remap-add-relative' for the popup buffer.")
 
 (defvar-local agnostic-translate--process nil
   "Async `claude -p' process for this buffer.")
@@ -211,79 +158,10 @@ Each entry is a plist (:source :results :time).
   "Counter for the thinking dots animation.")
 
 (defvar-local agnostic-translate--input-mode nil
-  "Non-nil when the popup is in text-input mode (before sending).")
+  "Non-nil when the buffer is in text-input mode (before sending).")
 
-;;; Anchor / frame plumbing
-
-(defun agnostic-translate--anchor-xy ()
-  "Return pixel (X . Y) at point in the selected window's frame."
-  (let* ((edges (window-inside-pixel-edges))
-         (posn (posn-at-point))
-         (xy (and posn (posn-x-y posn))))
-    (if xy
-        (cons (+ (nth 0 edges) (car xy))
-              (+ (nth 1 edges) (cdr xy) (default-line-height)))
-      (cons (nth 0 edges) (nth 1 edges)))))
-
-(defun agnostic-translate--apply-styles (frame buf)
-  "Apply faces to FRAME and BUF."
-  (let ((bg (face-attribute 'agnostic-translate-frame-face :background nil 'default))
-        (fg (face-attribute 'agnostic-translate-frame-face :foreground nil 'default))
-        (bd (face-attribute 'agnostic-translate-frame-border-face :background nil 'default)))
-    (when (stringp bg) (set-frame-parameter frame 'background-color bg))
-    (when (stringp fg) (set-frame-parameter frame 'foreground-color fg))
-    (dolist (face '(internal-border child-frame-border))
-      (when (facep face)
-        (set-face-background face (if (stringp bd) bd 'unspecified) frame)))
-    (with-current-buffer buf
-      (when agnostic-translate--face-cookie
-        (face-remap-remove-relative agnostic-translate--face-cookie))
-      (setq agnostic-translate--face-cookie
-            (face-remap-add-relative 'default 'agnostic-translate-frame-face)))))
-
-(defun agnostic-translate--make-frame (buf anchor)
-  "Create the translation child frame showing BUF at ANCHOR."
-  (let* ((parent (selected-frame))
-         (params (append `((parent-frame . ,parent)
-                           (left . ,(car anchor))
-                           (top  . ,(cdr anchor))
-                           (width . 1) (height . 1))
-                         agnostic-translate-frame-parameters))
-         (frame (make-frame params))
-         (win (frame-selected-window frame)))
-    (set-window-buffer win buf)
-    (set-window-dedicated-p win t)
-    (set-window-parameter win 'no-other-window t)
-    (agnostic-translate--apply-styles frame buf)
-    (make-frame-visible frame)
-    frame))
-
-(defun agnostic-translate--animate-frame (frame target-w target-h)
-  "Grow FRAME from 1x1 to TARGET-W x TARGET-H."
-  (let* ((i 0) (steps agnostic-translate-bubble-steps) timer)
-    (setq timer
-          (run-with-timer
-           0 agnostic-translate-bubble-interval
-           (lambda ()
-             (cl-incf i)
-             (cond
-              ((not (frame-live-p frame))
-               (cancel-timer timer))
-              ((>= i steps)
-               (set-frame-size frame target-w target-h)
-               (select-frame-set-input-focus frame)
-               (cancel-timer timer))
-              (t
-               (let ((k (/ (float i) steps)))
-                 (set-frame-size frame
-                                 (max 1 (round (* target-w k)))
-                                 (max 1 (round (* target-h k))))))))))))
-
-(defun agnostic-translate--close-frame ()
-  "Delete the translation child frame."
-  (when (and agnostic-translate--frame (frame-live-p agnostic-translate--frame))
-    (delete-frame agnostic-translate--frame t))
-  (setq agnostic-translate--frame nil))
+(defvar-local agnostic-translate--input-start nil
+  "Marker at the start of the user input area.")
 
 ;;; Thinking animation
 
@@ -325,6 +203,8 @@ Each entry is a plist (:source :results :time).
       (when (overlayp agnostic-translate--thinking-overlay)
         (delete-overlay agnostic-translate--thinking-overlay))
       (setq-local agnostic-translate--thinking-overlay nil))))
+
+(defvar agnostic-translate-input-mode-map)
 
 ;;; Process plumbing
 
@@ -403,9 +283,16 @@ Expects lines like \"[Language]: translation text\"."
                            :results (or results (list (cons "?" raw)))
                            :time (format-time-string "%Y-%m-%d %H:%M"))
                      agnostic-translate--history)))
+           (put-text-property (point-min) (point-max) 'read-only t)
+           (goto-char (point-max))
+           (insert "\n\n")
+           (setq-local agnostic-translate--input-start (point-marker))
+           (setq-local agnostic-translate--input-mode t)
+           (setq buffer-read-only nil)
+           (use-local-map agnostic-translate-input-mode-map)
            (setq header-line-format
                  (propertize
-                  " Translate  w copy | C-c C-k close | n new | h history"
+                  " Translate  C-c C-c send | w copy | q close | h history"
                   'face 'agnostic-translate-header-face)))
           ('signal
            (setq header-line-format
@@ -432,7 +319,7 @@ Text to translate:
     (setq-local agnostic-translate--source-text text)
     (let ((inhibit-read-only t)
           (langs agnostic-translate-languages))
-      (erase-buffer)
+      (goto-char (point-max))
       (insert (propertize text 'face 'agnostic-translate-source-face))
       (insert "\n\n")
       (insert (propertize (format "[-> %s] " (mapconcat #'identity langs ", "))
@@ -462,7 +349,6 @@ Text to translate:
     (define-key map (kbd "C-c C-c") #'agnostic-translate-send)
     (define-key map (kbd "C-c C-k") #'agnostic-translate-close)
     (define-key map (kbd "q")       #'agnostic-translate-close)
-    (define-key map (kbd "n")       #'agnostic-translate-new)
     (define-key map (kbd "h")       #'agnostic-translate-show-history)
     map)
   "Keymap for `agnostic-translate-mode'.")
@@ -507,40 +393,32 @@ With multiple language variants in the result, prompt via
                (truncate-string-to-width text 60 nil nil "...")))))
 
 (defun agnostic-translate-close ()
-  "Cancel any running process and close the popup."
+  "Cancel any running process and bury the translation buffer."
   (interactive)
   (when (process-live-p agnostic-translate--process)
     (kill-process agnostic-translate--process))
   (agnostic-translate--stop-thinking (current-buffer))
-  (let ((buf (current-buffer)))
-    (agnostic-translate--close-frame)
-    (kill-buffer buf)))
-
-(defun agnostic-translate-new ()
-  "Start a new translation in the current popup."
-  (interactive)
-  (when (process-live-p agnostic-translate--process)
-    (kill-process agnostic-translate--process)
-    (setq-local agnostic-translate--process nil))
-  (agnostic-translate--stop-thinking (current-buffer))
-  (let ((inhibit-read-only t))
-    (erase-buffer))
-  (setq-local agnostic-translate--input-mode t)
-  (setq buffer-read-only nil)
-  (use-local-map agnostic-translate-input-mode-map)
-  (setq header-line-format
-        (propertize " Translate  C-c C-c send | C-c C-k close"
-                    'face 'agnostic-translate-header-face)))
+  (quit-window))
 
 (defun agnostic-translate-send ()
-  "Send the buffer text for translation."
+  "Send the text in the input area for translation."
   (interactive)
   (when (process-live-p agnostic-translate--process)
     (user-error "Translation in progress"))
-  (let ((text (string-trim (buffer-string))))
+  (let ((text (string-trim
+               (if (and (markerp agnostic-translate--input-start)
+                        (marker-position agnostic-translate--input-start))
+                   (buffer-substring-no-properties
+                    agnostic-translate--input-start (point-max))
+                 (buffer-string)))))
     (when (string-empty-p text)
       (user-error "Nothing to translate"))
+    (let ((inhibit-read-only t))
+      (when (and (markerp agnostic-translate--input-start)
+                 (marker-position agnostic-translate--input-start))
+        (delete-region agnostic-translate--input-start (point-max))))
     (setq-local agnostic-translate--input-mode nil)
+    (setq-local agnostic-translate--input-start nil)
     (setq buffer-read-only t)
     (use-local-map agnostic-translate-mode-map)
     (agnostic-translate--spawn (current-buffer) text)))
@@ -570,7 +448,6 @@ With multiple language variants in the result, prompt via
               (insert "\n")))
           (insert "\n"))
         (goto-char (point-min))))
-    (agnostic-translate--close-frame)
     (pop-to-buffer buf)))
 
 ;;; History mode
@@ -605,32 +482,30 @@ RET copies the translation at point."
 
 ;;;###autoload
 (defun agnostic-translate (&optional text)
-  "Translate TEXT (or active region, or prompt for input) in a popup.
+  "Translate TEXT (or active region, or prompt for input).
 Auto-detects source language and translates to all other languages
-in `agnostic-translate-languages'."
+in `agnostic-translate-languages'.  Uses a single reusable buffer."
   (interactive)
   (let* ((region-text (when (use-region-p)
                         (prog1 (buffer-substring-no-properties
                                 (region-beginning) (region-end))
                           (deactivate-mark))))
          (source (or text region-text))
-         (buf (generate-new-buffer "*translate*")))
+         (buf (get-buffer-create "*translate*")))
     (with-current-buffer buf
+      (when (process-live-p agnostic-translate--process)
+        (kill-process agnostic-translate--process))
+      (agnostic-translate--stop-thinking buf)
       (agnostic-translate-mode))
-    (agnostic-translate--close-frame)
-    (if (display-graphic-p)
-        (let* ((size agnostic-translate-frame-size)
-               (anchor (agnostic-translate--anchor-xy))
-               (frame (agnostic-translate--make-frame buf anchor)))
-          (setq agnostic-translate--frame frame)
-          (agnostic-translate--animate-frame frame (car size) (cdr size)))
-      (pop-to-buffer buf))
+    (pop-to-buffer buf)
     (with-current-buffer buf
       (if source
           (agnostic-translate--spawn buf source)
         (setq-local agnostic-translate--input-mode t)
         (setq buffer-read-only nil)
         (use-local-map agnostic-translate-input-mode-map)
+        (goto-char (point-max))
+        (setq-local agnostic-translate--input-start (point-marker))
         (setq header-line-format
               (propertize " Translate  C-c C-c send | C-c C-k close"
                           'face 'agnostic-translate-header-face))))))
