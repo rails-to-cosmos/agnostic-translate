@@ -97,6 +97,11 @@ Normally toggled per-invocation via the `-m' switch in
                  (string :tag "Model name"))
   :group 'agnostic-translate)
 
+(defcustom agnostic-translate-separator (make-string 1 ?—)
+  "String displayed as a separator before each translation input."
+  :type 'string
+  :group 'agnostic-translate)
+
 (defconst agnostic-translate-all-languages
   '("English" "Russian" "German" "French" "Spanish" "Italian"
     "Portuguese" "Japanese" "Chinese" "Korean" "Arabic" "Hindi"
@@ -162,6 +167,24 @@ Each entry is a plist (:source :results :time).
 
 (defvar-local agnostic-translate--input-start nil
   "Marker at the start of the user input area.")
+
+(defvar-local agnostic-translate--guard-overlay nil
+  "Overlay protecting text before the input area from user edits.")
+
+(defun agnostic-translate--guard-fn (_ov after _beg _end &rest _)
+  "Overlay modification hook: block user-initiated changes."
+  (unless (or after inhibit-read-only)
+    (signal 'text-read-only nil)))
+
+(defun agnostic-translate--lock-before-point ()
+  "Protect all text before point from user modification."
+  (when (> (point) (point-min))
+    (when (overlayp agnostic-translate--guard-overlay)
+      (delete-overlay agnostic-translate--guard-overlay))
+    (let ((ov (make-overlay (point-min) (point) nil nil nil)))
+      (overlay-put ov 'modification-hooks '(agnostic-translate--guard-fn))
+      (overlay-put ov 'insert-in-front-hooks '(agnostic-translate--guard-fn))
+      (setq-local agnostic-translate--guard-overlay ov))))
 
 ;;; Thinking animation
 
@@ -248,8 +271,7 @@ Expects lines like \"[Language]: translation text\"."
           (progn
             (when current-lang
               (push (cons current-lang
-                          (string-trim (mapconcat #'identity
-                                                  (nreverse current-lines) "\n")))
+                          (string-trim (mapconcat #'identity (nreverse current-lines) "\n")))
                     results))
             (setq current-lang (match-string 1 line))
             (setq current-lines (list (match-string 2 line))))
@@ -283,9 +305,9 @@ Expects lines like \"[Language]: translation text\"."
                            :results (or results (list (cons "?" raw)))
                            :time (format-time-string "%Y-%m-%d %H:%M"))
                      agnostic-translate--history)))
-           (put-text-property (point-min) (point-max) 'read-only t)
            (goto-char (point-max))
-           (insert "\n\n")
+           (insert "\n\n" (propertize agnostic-translate-separator 'face 'shadow) " ")
+           (agnostic-translate--lock-before-point)
            (setq-local agnostic-translate--input-start (point-marker))
            (setq-local agnostic-translate--input-mode t)
            (setq buffer-read-only nil)
@@ -362,7 +384,7 @@ Text to translate:
   "Keymap active during text input in the translation popup.")
 
 (define-derived-mode agnostic-translate-mode special-mode "Translate"
-  "Major mode for the translation popup."
+  "Major mode for the translation buffer."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t))
 
@@ -501,11 +523,15 @@ in `agnostic-translate-languages'.  Uses a single reusable buffer."
     (with-current-buffer buf
       (if source
           (agnostic-translate--spawn buf source)
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (when (zerop (buffer-size))
+            (insert (propertize agnostic-translate-separator 'face 'shadow) " ")))
+        (agnostic-translate--lock-before-point)
+        (setq-local agnostic-translate--input-start (point-marker))
         (setq-local agnostic-translate--input-mode t)
         (setq buffer-read-only nil)
         (use-local-map agnostic-translate-input-mode-map)
-        (goto-char (point-max))
-        (setq-local agnostic-translate--input-start (point-marker))
         (setq header-line-format
               (propertize " Translate  C-c C-c send | C-c C-k close"
                           'face 'agnostic-translate-header-face))))))
