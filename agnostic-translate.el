@@ -250,15 +250,18 @@ Each entry is a plist (:source :results :time).
             (first-chunk (overlayp agnostic-translate--thinking-overlay))
             (was-at-end (= (point) (point-max)))
             (cleaned (agnostic-translate--clean-chunk chunk)))
+
         (when first-chunk
           (agnostic-translate--stop-thinking (current-buffer))
           (save-excursion
             (goto-char (point-max))
             (insert "\n")
             (setq-local agnostic-translate--result-start (point-marker))))
+
         (save-excursion
           (goto-char (point-max))
-          (insert (propertize cleaned 'face 'agnostic-translate-result-face)))
+          (insert (s-trim (propertize cleaned 'face 'agnostic-translate-result-face))))
+
         (when (or first-chunk was-at-end)
           (goto-char (point-max)))))))
 
@@ -395,12 +398,13 @@ Text to translate:
 With multiple language variants in the result, prompt via
 `completing-read' for which one to copy."
   (interactive)
+
   (unless (and (markerp agnostic-translate--result-start)
                (> (point-max) agnostic-translate--result-start))
     (user-error "No translation result yet"))
-  (let* ((raw (string-trim
-               (buffer-substring-no-properties
-                agnostic-translate--result-start (point-max))))
+
+  (let* ((raw (string-trim (buffer-substring-no-properties
+                            agnostic-translate--result-start (point-max))))
          (results (agnostic-translate--parse-results raw))
          (text (cond
                 ((null results) raw)
