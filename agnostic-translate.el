@@ -233,14 +233,15 @@ Each entry is a plist (:source :results :time).
 
 (defun agnostic-translate--clean-chunk (chunk)
   "Strip ANSI/OSC/CR and stray control chars from CHUNK."
-  (let* ((no-cr  (replace-regexp-in-string "\r" "" chunk))
-         (no-osc (replace-regexp-in-string "\e\\][^\a]*\\(?:\a\\|\e\\\\\\)" "" no-cr))
-         (no-csi (replace-regexp-in-string "\e\\[[?<>=]*[0-9;]*[a-zA-Z]" "" no-osc))
-         (no-charset (replace-regexp-in-string "\e[()*+][^\e\n]" "" no-csi))
-         (no-esc (replace-regexp-in-string "\e[^\e\n]?" "" no-charset))
-         (no-num-lines (replace-regexp-in-string
-                        "^[ \t]*[0-9]+[ \t]*\\(?:\n\\|\\'\\)" "" no-esc))
-         (result (ansi-color-apply no-num-lines)))
+  (let ((result (thread-last chunk
+                  (replace-regexp-in-string "\r" "")
+                  (replace-regexp-in-string "\e\\][^\a]*\\(?:\a\\|\e\\\\\\)" "")
+                  (replace-regexp-in-string "\e\\[[?<>=]*[0-9;]*[a-zA-Z]" "")
+                  (replace-regexp-in-string "\e[()*+][^\e\n]" "")
+                  (replace-regexp-in-string "\e[^\e\n]?" "")
+                  (replace-regexp-in-string "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" "")
+                  (replace-regexp-in-string "^[ \t]*[0-9]+[ \t]*\\(?:\n\\|\\'\\)" "")
+                  (ansi-color-apply))))
     (if (string-match-p "\\`[0-9[:space:]]*\\'" result) "" result)))
 
 (defun agnostic-translate--filter (proc chunk)
