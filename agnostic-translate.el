@@ -236,7 +236,8 @@ Each entry is a plist (:source :results :time).
   (let* ((no-cr  (replace-regexp-in-string "\r" "" chunk))
          (no-osc (replace-regexp-in-string "\e\\][^\a]*\\(?:\a\\|\e\\\\\\)" "" no-cr))
          (no-csi (replace-regexp-in-string "\e\\[[?<>=]*[0-9;]*[a-zA-Z]" "" no-osc))
-         (no-esc (replace-regexp-in-string "\e" "" no-csi))
+         (no-charset (replace-regexp-in-string "\e[()*+][^\e\n]" "" no-csi))
+         (no-esc (replace-regexp-in-string "\e[^\e\n]?" "" no-charset))
          (no-num-lines (replace-regexp-in-string
                         "^[ \t]*[0-9]+[ \t]*\\(?:\n\\|\\'\\)" "" no-esc))
          (result (ansi-color-apply no-num-lines)))
